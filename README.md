@@ -11,7 +11,7 @@
 - **Automatic Retries**: Failed jobs are automatically retried with **exponential backoff** delay
 - **Dead Letter Queue (DLQ)**: Jobs that fail all retry attempts are moved to the DLQ for manual inspection
 - **Configuration Management**: CLI-based commands to view and set configuration like retry counts
-- **Web Dashboard**: A (bonus) built-in web dashboard provides real-time monitoring of job states
+- **Web Dashboard**: A built-in web dashboard provides real-time monitoring of job states
 - **Clean CLI Interface**: A full-featured CLI for enqueuing, listing, and managing jobs
 
 ---

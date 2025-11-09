@@ -2,9 +2,8 @@
 
 `queuectl` is a CLI-based background job queue system built in Python. It is designed to be a minimal, production-grade service that manages background jobs, supports concurrent workers, handles automatic retries with exponential backoff, and includes a Dead Letter Queue (DLQ) for failed jobs.
 
-This project was built to fulfill the "Backend Developer Internship Assignment" requirements.
 
-## 🚀 Features
+## Features
 
 * **Persistent Storage**: Job data persists across restarts using a **SQLite** database.
 * **Concurrent Workers**: Run multiple workers in parallel to process jobs concurrently.
@@ -16,7 +15,7 @@ This project was built to fulfill the "Backend Developer Internship Assignment" 
 
 ---
 
-## ⚙️ How It Works: "What Happens"
+## How It Works: "What Happens"
 
 This system uses a central database (SQLite) as the single source of truth, allowing multiple processes to coordinate.
 
@@ -41,7 +40,7 @@ This system uses a central database (SQLite) as the single source of truth, allo
 
 ---
 
-## 🔧 Setup and Installation
+## Setup and Installation
 
 1.  **Clone Repository:**
     ```bash
@@ -60,7 +59,7 @@ This system uses a central database (SQLite) as the single source of truth, allo
 
 ---
 
-## 💻 CLI Command Reference
+## CLI Command Reference
 
 All examples are for the **Windows Command Prompt (cmd.exe)**.
 
@@ -120,3 +119,157 @@ Get a quick summary of all job states.
 
 ```cmd
 python -m queuectl.cli status
+
+---
+
+## Test With theses Scenarios
+
+###Scenario 1: Basic Job Completes Successfully
+
+ Terminal 1: Enqueue the job
+python -m queuectl.cli enqueue "{\"id\":\"job-success-1\",\"command\":\"timeout /t 5 /nobreak\"}"
+
+:: Terminal 2: Start the worker
+python -m queuectl.cli worker start --count 1
+
+:: Terminal 1: Check for completion after ~5 seconds
+python -m queuectl.cli list --state completed
+
+###Scenario 2: Failed Job Retries (Backoff) & Moves to DLQ
+DOS
+
+:: Terminal 1: Enqueue the failing job
+python -m queuectl.cli enqueue "{\"id\":\"job-fail-1\",\"command\":\"nonexistent-command-12345\"}"
+
+:: Terminal 2: Ensure worker is running
+python -m queuectl.cli worker start --count 1
+
+:: Terminal 1: Check the DLQ after ~15 seconds
+python -m queuectl.cli dlq list
+
+###Scenario 3: Multiple Workers Process Jobs Without Overlap
+DOS
+
+:: Terminal 1: Enqueue two long jobs
+python -m queuectl.cli enqueue "{\"id\":\"multi-job-A\",\"command\":\"timeout /t 10 /nobreak\"}"
+python -m queuectl.cli enqueue "{\"id\":\"multi-job-B\",\"command\":\"timeout /t 10 /nobreak\"}"
+
+:: Terminal 2: Stop any old workers (Ctrl+C), then start 2 new ones
+python -m queuectl.cli worker start --count 2
+
+###Scenario 4: Job Data Survives Restart
+DOS
+
+:: Terminal 2: Stop any running workers (Ctrl+C)
+
+:: Terminal 1: Enqueue the persistence test job
+python -m queuectl.cli enqueue "{\"id\":\"job-persist-1\",\"command\":\"echo I survived!\"}"
+
+:: Terminal 1: Verify it's pending
+python -m queuectl.cli list --state pending
+
+:: (Close all terminals, then re-open a new one and cd to your project)
+
+:: Terminal 1 (New): Verify it's still pending
+python -m queuectl.cli list --state pending
+
+###Scenario 5: Enqueue Duplicate Job ID
+
+:: Terminal 1: Enqueue the first job (this will work)
+python -m queuectl.cli enqueue "{\"id\":\"job-duplicate-1\",\"command\":\"echo first job\"}"
+
+:: Terminal 1: Enqueue the second job with the same ID (this will fail)
+python -m queuectl.cli enqueue "{\"id\":\"job-duplicate-1\",\"command\":\"echo second job\"}"
+
+###Scenario 6: Change Backoff Configuration
+
+
+:: Terminal 1: Set a new backoff base
+python -m queuectl.cli config set backoff-base 5
+
+:: Terminal 1: Verify the change
+python -m queuectl.cli config get backoff-base
+
+:: Terminal 2: Stop any running workers (Ctrl+C)
+
+:: Terminal 1: Enqueue a failing job
+python -m queuectl.cli enqueue "{\"id\":\"job-backoff-test\",\"command\":\"nonexistent-command-999\"}"
+
+:: Terminal 2: Start a new worker
+python -m queuectl.cli worker start --count 1
+
+:: (Observe the worker log for a "5.0s" retry delay)
+
+:: Terminal 1 (Cleanup): Reset the config to default
+python -m queuectl.cli config set backoff-base 2
+
+---
+## Architecture Overview
+
+c:\Users\ADMIN\AppData\Local\Packages\5319275A.WhatsAppDesktop_cv1g1gvanyjgm\TempState\5421E013565F7F1AFA0CFE8AD87A99AB\WhatsApp Image 2025-11-09 at 22.06.27_db55add7.jpg
+
+### Components
+* **`cli.py`**: (Controller) The main CLI entry point using `click`. It parses user input and calls the appropriate manager.
+* **`storage.py`**: (Model/Persistence) The persistence layer. It handles all SQLite database connections, queries, and transactions. This is the only part of the app that "knows" SQL.
+* **`worker.py`**: (Logic) Contains the `WorkerManager` and `Worker` classes. The `WorkerManager` starts and stops worker processes. The `Worker` class contains the core logic for fetching, locking, executing (`subprocess.Popen`), and updating jobs.
+* **`models.py`**: (Data Structure) Defines the `Job` dataclass and `JobState` constants, ensuring clean data handling.
+* **`config.py`**: (Configuration) Manages reading/writing the `config.json` file.
+* **`dashboard.py`**: (View) A simple `Flask` app that reads from `storage.py` to display data.
+
+### Job Lifecycle
+Jobs move between states based on worker actions:
+
+1.  **`pending`**: A job is created (from `enqueue`).
+2.  **`processing`**: A worker locks the job and begins execution.
+3.  **`completed`**: The job's command exits with code 0.
+4.  **`failed`**: The command exits with a non-zero code.
+    * If `attempts < max_retries`, the job is scheduled for a future retry (with exponential backoff) and will return to `pending` when ready.
+    * If `attempts >= max_retries`, the job is moved to...
+5.  **`dead`**: The job is moved to the Dead Letter Queue (DLQ) for manual review.
+
+## Assumptions & Trade-offs
+
+* **Storage (SQLite)**:
+    * **Pro:** Zero-configuration, serverless, and file-based. Perfect for a self-contained CLI tool and fulfills the persistence requirement simply.
+    * **Con:** Not ideal for extremely high-concurrency, multi-server distributed systems (where RabbitMQ, Redis, or PostgreSQL would be better).
+* **Concurrency (Threading)**:
+    * **Pro:** The `WorkerManager` uses Python's `threading` to run multiple workers. This is simple to manage and works well for I/O-bound tasks (like waiting for a subprocess to finish).
+    * **Con:** Due to the Global Interpreter Lock (GIL), this model does not provide true parallelism for CPU-bound tasks.
+* **Platform (Windows)**:
+    * **Pro:** The solution is fully functional on Windows.
+    * **Con:** The `enqueue` command syntax is complex due to `cmd.exe`'s quote handling. The test commands also use Windows-specific commands (`timeout`) instead of cross-platform commands (`sleep`).
+* **Job Execution (`shell=True`)**:
+    * **Pro:** Allows for complex commands to be run easily (e.g., `echo "hi" > file.txt`).
+    * **Con:** This is a potential security risk if a user can enqueue a malicious command. It assumes all commands are from a trusted source.
+
+---
+
+## Testing Instructions
+
+You can test all core flows using the automated script or by running the manual scenarios.
+
+### Test 1: Automated Validation Script (Recommended)
+
+This script automatically cleans the environment and runs all 6 core scenarios.
+
+1.  Save the code below as `validate.py` in your project's root folder (`D:\FLAM_NEW\`).
+2.  From your Command Prompt, run the script:
+    ```cmd
+    python validate.py
+    ```
+
+```python
+#!/usr/bin/env python3
+"""
+Comprehensive validation script for QueueCTL core functionality.
+
+This script tests:
+1. Basic Job Success (Simple & Long-Running)
+2. Failure -> Retry -> DLQ
+3. Concurrency (Multiple workers)
+4. Job Persistence (Worker restart)
+5. DLQ Retry Functionality
+6. Configuration (Edge Case)
+
+It is designed to be run from the command line (cmd.exe) and will
+clean up the environment, run all tests, and report a summary.

@@ -43,8 +43,8 @@ If a job fails more than its `max_retries` (e.g., 3 times), the worker will give
 
 ### 1. Clone Repository
 ```bash
-git clone <your-repository-url>
-cd <your-project-directory>
+git clone https://github.com/zeusXtruealpha/FLAM_Niranjan
+cd FLAM_Niranjan
 ```
 
 ### 2. Install Dependencies
